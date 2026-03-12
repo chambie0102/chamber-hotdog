@@ -45,7 +45,7 @@ spec:
         - name: WANDB_ENTITY
           value: "jasonong-chamberai"
         - name: WANDB_API_KEY
-          value: "PLACEHOLDER"
+          value: "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"
         volumeMounts:
         - name: dshm
           mountPath: /dev/shm
