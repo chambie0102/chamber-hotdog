@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: chamber-hotdog-v1-1773278809
+  name: chamber-hotdog-v2-1773279228
 spec:
   backoffLimit: 0
   template:
@@ -21,7 +21,7 @@ spec:
           sizeLimit: 2Gi
       containers:
       - name: train
-        image: chambie0102/chamber-hotdog:v1
+        image: chambie0102/chamber-hotdog:v2
         command: ["python", "train.py"]
         env:
         - name: BATCH_SIZE
