@@ -124,7 +124,7 @@ class HotDogBinaryDataset(Dataset):
 
 print("Loading Food-101 dataset...")
 from datasets import load_dataset
-food101 = load_dataset("ethz/food-101")
+food101 = load_dataset("food101")
 
 print("Building training set...")
 train_ds = HotDogBinaryDataset(food101["train"], train_transform, balance=True)
