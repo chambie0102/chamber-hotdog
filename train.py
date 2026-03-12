@@ -2,13 +2,14 @@
 
 Uses Food-101 dataset (hotdog class vs balanced sample of other classes).
 All hyperparams via environment variables for iteration without rebuild.
+Memory-efficient: stores indices only, loads images lazily.
 """
 import os
 import random
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader, Dataset
 from torchvision.models import vit_b_16, ViT_B_16_Weights
 from collections import defaultdict
 
@@ -20,7 +21,7 @@ DROPOUT = float(os.environ.get("DROPOUT", "0.0"))
 USE_CLASS_WEIGHTS = os.environ.get("USE_CLASS_WEIGHTS", "false").lower() == "true"
 AUGMENTATION = os.environ.get("AUGMENTATION", "none")
 WARMUP_EPOCHS = int(os.environ.get("WARMUP_EPOCHS", "0"))
-NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "4"))
+NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "chamber-hotdog")
 WANDB_ENTITY = os.environ.get("WANDB_ENTITY", "jasonong-chamberai")
 SEED = int(os.environ.get("SEED", "42"))
@@ -71,41 +72,52 @@ val_transform = base_transform
 
 # ── Dataset: Food-101 → Binary (hotdog vs not) ───────────
 class HotDogBinaryDataset(Dataset):
-    """Wraps a HuggingFace Food-101 split into hotdog (1) vs not-hotdog (0)."""
+    """Wraps a HuggingFace Food-101 split into hotdog (1) vs not-hotdog (0).
+    
+    Memory-efficient: only stores indices, loads images on-the-fly.
+    """
 
     def __init__(self, hf_dataset, transform, balance=True):
+        self.hf_dataset = hf_dataset
         self.transform = transform
-        self.samples = []  # list of (image, label)
-
+        
         # Food-101 class index for hot_dog
         label_names = hf_dataset.features["label"].names
         hotdog_idx = label_names.index("hot_dog")
 
-        hotdog_items = []
-        other_items = []
+        # Build index lists (just integers, not images)
+        hotdog_indices = []
+        other_indices = []
 
-        for item in hf_dataset:
-            if item["label"] == hotdog_idx:
-                hotdog_items.append((item["image"], 1))
+        for i, label in enumerate(hf_dataset["label"]):
+            if label == hotdog_idx:
+                hotdog_indices.append(i)
             else:
-                other_items.append((item["image"], 0))
+                other_indices.append(i)
 
-        print(f"  Raw: {len(hotdog_items)} hotdog, {len(other_items)} not-hotdog")
+        print(f"  Raw: {len(hotdog_indices)} hotdog, {len(other_indices)} not-hotdog")
 
         if balance:
-            # Balance: sample same number of not-hotdog as hotdog
-            random.shuffle(other_items)
-            other_items = other_items[:len(hotdog_items)]
-            print(f"  Balanced: {len(hotdog_items)} hotdog, {len(other_items)} not-hotdog")
+            random.shuffle(other_indices)
+            other_indices = other_indices[:len(hotdog_indices)]
+            print(f"  Balanced: {len(hotdog_indices)} hotdog, {len(other_indices)} not-hotdog")
 
-        self.samples = hotdog_items + other_items
+        # Store (hf_index, binary_label) pairs
+        self.samples = [(idx, 1) for idx in hotdog_indices] + \
+                       [(idx, 0) for idx in other_indices]
         random.shuffle(self.samples)
+        
+        # Count labels for class weights
+        self.label_counts = defaultdict(int)
+        for _, label in self.samples:
+            self.label_counts[label] += 1
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        image, label = self.samples[idx]
+        hf_idx, label = self.samples[idx]
+        image = self.hf_dataset[hf_idx]["image"]
         image = self.transform(image)
         return image, label
 
@@ -128,11 +140,8 @@ print(f"Train: {len(train_ds)} samples, Val: {len(val_ds)} samples")
 
 # ── Class Weights ─────────────────────────────────────────
 if USE_CLASS_WEIGHTS:
-    label_counts = defaultdict(int)
-    for _, label in train_ds.samples:
-        label_counts[label] += 1
-    total = sum(label_counts.values())
-    weights = torch.tensor([total / (2 * label_counts[i]) for i in range(2)],
+    total = sum(train_ds.label_counts.values())
+    weights = torch.tensor([total / (2 * train_ds.label_counts[i]) for i in range(2)],
                            dtype=torch.float32).to(device)
     print(f"Class weights: {weights.tolist()}")
 else:
